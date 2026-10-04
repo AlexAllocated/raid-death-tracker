@@ -12,7 +12,7 @@ if not LibStub or LibStub.minor < LIBSTUB_MINOR then
     _G[LIBSTUB_MAJOR] = LibStub
     LibStub.minor = LIBSTUB_MINOR
     function LibStub:NewLibrary(major, minor)
-        minor = assert(tonumber(select(2, ("%s.%s"):format(minor, ""))),
+        minor = assert(tonumber(tostring(minor):match("%d+")),
             "Minor version must be a number")
         local oldminor = self.minors[major]
         if oldminor and oldminor >= minor then return nil end
