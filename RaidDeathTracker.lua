@@ -495,7 +495,7 @@ local TBC_DUNGEONS = {
 -- timer (group required, so solo farming does not trigger it).
 -- Same-type chains continue the log; a type switch starts fresh.
 local function OnCombatStart()
-    if not RDTConfig or isTestMode then return end
+    if not RDTConfig then return end
     if not (IsInRaid() or IsInGroup()) then return end
     local _, instType = IsInInstance()
     if instType ~= "raid" and instType ~= "party" then return end
@@ -635,7 +635,7 @@ end
 -- combat-log fallback) — dedupe via encounter id AND boss name; a
 -- later event may backfill the fight duration.
 local function RecordBossKill(encounterID, encounterName, fightDur)
-    if not RDTConfig or isTestMode then return end
+    if not RDTConfig then return end
     local _, instType = IsInInstance()
     if instType ~= "raid" and instType ~= "party" then return end
     local log = RDTConfig.raidLog

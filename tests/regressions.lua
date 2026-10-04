@@ -1,69 +1,223 @@
--- Run from the repository root: lua tests/regressions.lua
-local realprint=print
-local objects={}
-local methods={}
-local function obj(kind,parent)
- local o=setmetatable({kind=kind,parent=parent,shown=true,scripts={}}, {__index=function(_,k)return methods[k] or function()end end})
- objects[#objects+1]=o;return o
+-- Run from the repository root: lua tests/regressions.lua [case-name]
+-- Load the actual addon and library; only the WoW UI and event sources are mocked.
+local report = print
+local objects, methods = {}, {}
+local function noop() end
+local function widget(kind, parent)
+    local object = setmetatable({ kind = kind, parent = parent, shown = true, scripts = {} }, {
+        __index = function(_, key) return methods[key] or noop end,
+    })
+    objects[#objects + 1] = object
+    return object
 end
-methods.SetScript=function(s,k,f)s.scripts[k]=f end
-methods.Show=function(s)s.shown=true end;methods.Hide=function(s)s.shown=false end
-methods.IsShown=function(s)return s.shown end
-methods.SetText=function(s,t)s.text=t end
-methods.CreateTexture=function(s)return obj('texture',s)end
-methods.CreateFontString=function(s)return obj('font',s)end
-methods.GetWidth=function()return 260 end;methods.GetHeight=function()return 185 end
-CreateFrame=function(kind,name,parent)local o=obj(kind,parent);if name then _G[name]=o end;return o end
-UIParent=obj('Frame');Minimap=obj('Frame');SlashCmdList={}
-local now=100;local grouped=true;local class='WARRIOR';local dead=true;local ghost=false;local moved=false
-GetTime=function()return now end;time=GetTime;date=function()return '04.10'end
-IsInRaid=function()return false end;IsInGroup=function()return grouped end
-IsInInstance=function()return false,'none'end;GetRealZoneText=function()return 'World'end
-UnitName=function(unit)if unit=='player'then return 'Alice' end end
-UnitExists=function(unit)return unit=='player' or (moved and unit=='party1')end
-UnitGUID=function(unit)if unit==(moved and 'party1' or 'player')then return 'Player-1-A' end end
-UnitClass=function()return class,class end
-UnitIsDead=function()return dead end
-UnitIsDeadOrGhost=function()return dead or ghost end
-MouseIsOver=function()return true end;IsMouseButtonDown=function()return false end
-LibStub=nil
-dofile('libs/LibDBIcon-1-0.lua')
-assert(LibStub:GetLibrary('LibDBIcon-1.0'))
-assert(LibStub:NewLibrary('test', 'Revision: 5'))
-assert(not LibStub:NewLibrary('test', 4))
-print=function()end
-dofile('RaidDeathTracker.lua')
-local event=RaidDeathTrackerFrame.scripts.OnEvent
-event(RaidDeathTrackerFrame,'ADDON_LOADED','RaidDeathTracker')
-local function death()
- CombatLogGetCurrentEventInfo=function()return now,'UNIT_DIED',nil,nil,nil,nil,nil,'Player-1-A','Alice'end
- event(RaidDeathTrackerFrame,'COMBAT_LOG_EVENT_UNFILTERED')
+methods.SetScript = function(self, key, callback) self.scripts[key] = callback end
+methods.Show = function(self) self.shown = true end
+methods.Hide = function(self) self.shown = false end
+methods.IsShown = function(self) return self.shown end
+methods.SetText = function(self, text) self.text = text end
+methods.CreateTexture = function(self) return widget("texture", self) end
+methods.CreateFontString = function(self) return widget("font", self) end
+methods.GetWidth = function() return 260 end
+methods.GetHeight = function() return 185 end
+CreateFrame = function(kind, name, parent)
+    local object = widget(kind, parent)
+    if name then _G[name] = object end
+    return object
 end
-death();now=110;death()
-assert(RaidDeathData.Alice==2, 'a second real death must count')
-class='HUNTER';now=200;RaidDeathData={};death();dead=false;ghost=true;moved=true;now=204
-for _,o in ipairs(objects)do if o.kind=='Frame'and o~=RaidDeathTrackerDisplay and o.scripts.OnUpdate then o.scripts.OnUpdate(o,4)end end
-assert(RaidDeathData.Alice==1, 'release and roster movement must preserve a hunter death')
-ghost=false;moved=false;now=210;death()
-CombatLogGetCurrentEventInfo=function()return now,'SPELL_RESURRECT',nil,nil,nil,nil,nil,'Player-1-A','Alice'end
-event(RaidDeathTrackerFrame,'COMBAT_LOG_EVENT_UNFILTERED')
-assert(RaidDeathData.Alice==2, 'resurrection before the check must preserve the death')
-now=214
-for _,o in ipairs(objects)do if o.kind=='Frame'and o~=RaidDeathTrackerDisplay and o.scripts.OnUpdate then o.scripts.OnUpdate(o,4)end end
-assert(RaidDeathData.Alice==2, 'resurrection must not double-count the pending death')
-now=220;death();now=224
-for _,o in ipairs(objects)do if o.kind=='Frame'and o~=RaidDeathTrackerDisplay and o.scripts.OnUpdate then o.scripts.OnUpdate(o,4)end end
-assert(RaidDeathData.Alice==2, 'Feign Death must not count')
-RaidDeathData={Alice=5};RDTSessions={{name='Yesterday',data={Bob=2},classes={}}}
-for _,o in ipairs(objects)do if o.kind=='font' and o.text=='<'then o.parent.scripts.OnClick()end end
-grouped=false;event(RaidDeathTrackerFrame,'GROUP_ROSTER_UPDATE')
-assert(#RDTSessions==2 and RDTSessions[1].data.Alice==5, 'archive view must not prevent saving')
-grouped=true;event(RaidDeathTrackerFrame,'GROUP_ROSTER_UPDATE')
-assert(next(RaidDeathData)==nil, 'a new group must start a new session')
-RaidDeathData.Alice=7
-local saved=RaidDeathData
-SlashCmdList.RAIDDEATHTRACKER('test')
-assert(RaidDeathData==saved and RaidDeathData.Alice==7, 'test data must never enter SavedVariables')
-SlashCmdList.RAIDDEATHTRACKER('test clear')
-assert(RaidDeathData==saved and RaidDeathData.Alice==7, 'clearing test mode must preserve the live session')
-realprint('RaidDeathTracker regressions passed')
+UIParent, Minimap, SlashCmdList = widget("Frame"), widget("Frame"), {}
+
+local now, grouped, instance = 100, true, "none"
+local alice = { name = "Alice", guid = "Player-1-A", class = "WARRIOR", dead = true }
+local bob = { name = "Bob", guid = "Player-1-B", class = "WARRIOR" }
+local units = { player = bob, party1 = alice }
+GetTime = function() return now end
+time, date = GetTime, function() return "04.10" end
+IsInRaid = function() return false end
+IsInGroup = function() return grouped end
+IsInInstance = function() return instance ~= "none", instance end
+GetRealZoneText = function() return instance == "raid" and "Karazhan" or "World" end
+UnitExists = function(token) return units[token] ~= nil end
+UnitName = function(token) return units[token] and units[token].name end
+UnitGUID = function(token) return units[token] and units[token].guid end
+UnitClass = function(token)
+    local class = units[token] and units[token].class
+    return class, class
+end
+UnitIsDead = function(token) return units[token] and units[token].dead or false end
+UnitIsDeadOrGhost = function(token)
+    local unit = units[token]
+    return unit and (unit.dead or unit.ghost) or false
+end
+MouseIsOver, IsMouseButtonDown = function() return true end, function() return false end
+
+LibStub = nil
+dofile("libs/LibDBIcon-1-0.lua")
+assert(LibStub:GetLibrary("LibDBIcon-1.0"), "standalone startup must register the library")
+local stub, iconLibrary, newLibrary = LibStub, LibStub("LibDBIcon-1.0"), LibStub.NewLibrary
+dofile("libs/LibDBIcon-1-0.lua")
+assert(LibStub == stub and LibStub.NewLibrary == newLibrary, "reuse an existing LibStub")
+assert(LibStub("LibDBIcon-1.0") == iconLibrary, "reuse an existing library of the same version")
+assert(LibStub:NewLibrary("test", "Revision: 5"))
+assert(not LibStub:NewLibrary("test", 4), "an older library must not replace a newer version")
+
+print = noop
+dofile("RaidDeathTracker.lua")
+local function event(name, ...)
+    RaidDeathTrackerFrame.scripts.OnEvent(RaidDeathTrackerFrame, name, ...)
+end
+event("ADDON_LOADED", "RaidDeathTracker")
+
+local function combatEvent(kind, unit)
+    unit = unit or alice
+    CombatLogGetCurrentEventInfo = function()
+        return now, kind, nil, nil, nil, nil, nil, unit.guid, unit.name
+    end
+    event("COMBAT_LOG_EVENT_UNFILTERED")
+end
+local function advance(seconds)
+    now = now + seconds
+    for _, object in ipairs(objects) do
+        local update = object.scripts.OnUpdate
+        if object.kind == "Frame" and update then update(object, seconds) end
+    end
+end
+local function command(text) SlashCmdList.RAIDDEATHTRACKER(text) end
+local function click(label)
+    for _, object in ipairs(objects) do
+        if object.kind == "font" and object.text == label then
+            object.parent.scripts.OnClick()
+            return
+        end
+    end
+    error("missing button " .. label)
+end
+local function reset()
+    grouped, instance = true, "none"
+    alice.class, alice.dead, alice.ghost = "WARRIOR", true, false
+    units = { player = bob, party1 = alice }
+    RDTSessions, RDTConfig.raidLog = {}, {}
+    command("test clear")
+    command("reset")
+end
+
+local cases = {
+    { "repeat-death", function()
+        combatEvent("UNIT_DIED")
+        advance(10)
+        combatEvent("SPELL_RESURRECT")
+        combatEvent("UNIT_DIED")
+        assert(RaidDeathData.Alice == 2, "a second real death within 20 seconds must count")
+    end },
+    { "priest-resurrection", function()
+        alice.class = "PRIEST"
+        combatEvent("UNIT_DIED")
+        advance(15)
+        combatEvent("UNIT_DIED")
+        assert(RaidDeathData.Alice == 1, "Spirit of Redemption must not count twice")
+        combatEvent("SPELL_RESURRECT")
+        advance(1)
+        combatEvent("UNIT_DIED")
+        assert(RaidDeathData.Alice == 2, "a resurrected priest's next death must count")
+    end },
+    { "hunter-release", function()
+        alice.class = "HUNTER"
+        combatEvent("UNIT_DIED")
+        alice.dead, alice.ghost = false, true
+        units.party1, units.party2 = bob, alice
+        advance(4)
+        assert(RaidDeathData.Alice == 1, "release and roster movement must preserve the death")
+        assert(not RaidDeathData.Bob, "a recycled unit token must not identify the victim")
+    end },
+    { "hunter-resurrection", function()
+        alice.class = "HUNTER"
+        combatEvent("UNIT_DIED")
+        advance(1)
+        combatEvent("SPELL_RESURRECT")
+        alice.dead = false
+        assert(RaidDeathData.Alice == 1, "resurrection before the check must preserve the death")
+        advance(3)
+        assert(RaidDeathData.Alice == 1, "the delayed check must not count it again")
+        alice.dead = true
+        combatEvent("UNIT_DIED")
+        advance(4)
+        assert(RaidDeathData.Alice == 2, "a second hunter death must count separately")
+    end },
+    { "feign-death", function()
+        alice.class, alice.dead = "HUNTER", false
+        combatEvent("UNIT_DIED")
+        advance(4)
+        assert(not RaidDeathData.Alice, "Feign Death must not count")
+    end },
+    { "pending-reset", function()
+        alice.class = "HUNTER"
+        combatEvent("UNIT_DIED")
+        command("reset")
+        advance(4)
+        assert(next(RaidDeathData) == nil, "reset must also clear pending deaths")
+    end },
+    { "history-session", function()
+        RaidDeathData.Alice = 5
+        RDTSessions = { { name = "Yesterday", data = { Bob = 2 }, classes = {} } }
+        click("<")
+        grouped = false
+        event("GROUP_ROSTER_UPDATE")
+        assert(#RDTSessions == 2 and RDTSessions[1].data.Alice == 5,
+            "viewing history must not prevent saving the live session")
+        -- Browsing an archive while solo must not suppress the next group join.
+        click("<")
+        grouped = true
+        event("GROUP_ROSTER_UPDATE")
+        assert(next(RaidDeathData) == nil, "a new group must start a new session")
+    end },
+    { "test-data", function()
+        RaidDeathData.Alice = 7
+        RDTClassCache.Alice = "WARRIOR"
+        local saved, classes = RaidDeathData, RDTClassCache
+        command("test")
+        assert(RaidDeathData == saved and RaidDeathData.Alice == 7 and not RaidDeathData.Arthas,
+            "sample data must never enter SavedVariables")
+        assert(RDTClassCache == classes and RDTClassCache.Alice == "WARRIOR")
+        combatEvent("UNIT_DIED")
+        command("test clear")
+        assert(RaidDeathData == saved and RaidDeathData.Alice == 8,
+            "real deaths during test mode must survive clearing the preview")
+    end },
+    { "test-session", function()
+        RaidDeathData.Alice = 3
+        command("test")
+        grouped = false
+        event("GROUP_ROSTER_UPDATE")
+        assert(#RDTSessions == 1 and RDTSessions[1].data.Alice == 3,
+            "leaving during test mode must save real deaths")
+        assert(not RDTSessions[1].data.Arthas, "samples must not enter the archive")
+        assert(RaidDeathTrackerDisplay:IsShown(), "the preview should remain visible")
+        grouped = true
+        event("GROUP_ROSTER_UPDATE")
+        command("test clear")
+        assert(next(RaidDeathData) == nil, "joining during test mode must reset the live session")
+    end },
+    { "test-raid-log", function()
+        instance = "raid"
+        command("test")
+        event("ENCOUNTER_START", 1)
+        advance(10)
+        event("ENCOUNTER_END", 1, "Moroes", nil, nil, 1)
+        command("test clear")
+        local log = RDTConfig.raidLog
+        assert(log.startTime and #log.bosses == 1 and log.bosses[1].name == "Moroes",
+            "previewing sample data must not pause the real raid log")
+        assert(log.bosses[1].dur == 10)
+    end },
+}
+
+local ran = 0
+for _, case in ipairs(cases) do
+    if not arg[1] or arg[1] == case[1] then
+        reset()
+        case[2]()
+        ran = ran + 1
+        report("PASS " .. case[1])
+    end
+end
+assert(ran > 0, "unknown case name")
+report("RaidDeathTracker regressions passed (" .. ran .. " cases plus library startup)")
