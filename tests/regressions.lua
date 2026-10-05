@@ -26,7 +26,7 @@ CreateFrame = function(kind, name, parent)
 end
 UIParent, Minimap, SlashCmdList = widget("Frame"), widget("Frame"), {}
 
-local now, grouped, instance = 100, true, "none"
+local now, grouped, instance, difficulty = 100, true, "none", 1
 local alice = { name = "Alice", guid = "Player-1-A", class = "WARRIOR", dead = true }
 local bob = { name = "Bob", guid = "Player-1-B", class = "WARRIOR" }
 local units = { player = bob, party1 = alice }
@@ -35,7 +35,12 @@ time, date = GetTime, function() return "04.10" end
 IsInRaid = function() return false end
 IsInGroup = function() return grouped end
 IsInInstance = function() return instance ~= "none", instance end
-GetRealZoneText = function() return instance == "raid" and "Karazhan" or "World" end
+GetRealZoneText = function()
+    return instance == "raid" and "Karazhan" or instance == "party" and "Hellfire Ramparts" or "World"
+end
+GetInstanceInfo = function()
+    return GetRealZoneText(), instance, difficulty, nil, nil, nil, nil, instance == "party" and 543 or 532
+end
 UnitExists = function(token) return units[token] ~= nil end
 UnitName = function(token) return units[token] and units[token].name end
 UnitGUID = function(token) return units[token] and units[token].guid end
@@ -92,7 +97,7 @@ local function click(label)
     error("missing button " .. label)
 end
 local function reset()
-    grouped, instance = true, "none"
+    grouped, instance, difficulty = true, "none", 1
     alice.class, alice.dead, alice.ghost = "WARRIOR", true, false
     units = { player = bob, party1 = alice }
     RDTSessions, RDTConfig.raidLog = {}, {}
@@ -101,6 +106,62 @@ local function reset()
 end
 
 local cases = {
+    { "repeat-dungeon", function()
+        instance = "party"
+        event("PLAYER_REGEN_DISABLED")
+        advance(20)
+        event("BOSS_KILL", 1, "Watchkeeper Gargolmar")
+        advance(20)
+        event("BOSS_KILL", 2, "Vazruden the Herald")
+        local log = RDTConfig.raidLog
+        assert(log.finalDown)
+        instance = "none"
+        event("PLAYER_ENTERING_WORLD")
+        advance(100)
+        instance = "party"
+        event("PLAYER_ENTERING_WORLD")
+        event("PLAYER_REGEN_DISABLED")
+        assert(not log.finalDown and log.segStart == now, "the next normal run needs a fresh segment")
+        assert(log.baseElapsed == 40, "exclude travel and retain the first completed run")
+        advance(20)
+        event("BOSS_KILL", 1, "Watchkeeper Gargolmar")
+        event("BOSS_KILL", 1, "Watchkeeper Gargolmar")
+        assert(#log.bosses == 3 and log.bosses[3].e == 60, "count the second kill once")
+    end },
+    { "dungeon-reload-and-corpse-run", function()
+        instance = "party"
+        event("PLAYER_REGEN_DISABLED")
+        advance(20)
+        event("BOSS_KILL", 1, "Watchkeeper Gargolmar")
+        local log, start = RDTConfig.raidLog, RDTConfig.raidLog.segStart
+        instance = "none"
+        event("PLAYER_ENTERING_WORLD")
+        instance = "party"
+        event("PLAYER_ENTERING_WORLD")
+        event("PLAYER_REGEN_DISABLED")
+        assert(log.segStart == start and #log.zones == 1, "an unfinished run survives re-entry")
+        event("BOSS_KILL", 2, "Vazruden the Herald")
+        event("PLAYER_ENTERING_WORLD", false, true)
+        event("PLAYER_REGEN_DISABLED")
+        assert(log.finalDown and log.segStart == start, "reload inside a finished run must not restart it")
+    end },
+    { "completed-lockout-reentry", function()
+        for _, kind in ipairs({ "raid", "party" }) do
+            RDTConfig.raidLog = {}
+            instance, difficulty = kind, 2
+            event("PLAYER_REGEN_DISABLED")
+            advance(20)
+            local log = RDTConfig.raidLog
+            log.finalDown = true
+            local start = log.segStart
+            instance = "none"
+            event("PLAYER_ENTERING_WORLD")
+            instance = kind
+            event("PLAYER_ENTERING_WORLD")
+            event("PLAYER_REGEN_DISABLED")
+            assert(log.finalDown and log.segStart == start, "a raid or heroic lockout is not a new run")
+        end
+    end },
     { "repeat-death", function()
         combatEvent("UNIT_DIED")
         advance(10)

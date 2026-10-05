@@ -499,13 +499,18 @@ local function OnCombatStart()
     if not (IsInRaid() or IsInGroup()) then return end
     local _, instType = IsInInstance()
     if instType ~= "raid" and instType ~= "party" then return end
+    local normalDungeon = false
     if instType == "party" then
-        local mapID = select(8, GetInstanceInfo())
+        local _, _, difficulty, _, _, _, _, mapID = GetInstanceInfo()
         if not TBC_DUNGEONS[mapID or 0] then return end
+        normalDungeon = difficulty == 1
     end
     local zone = GetRealZoneText() or "Instance"
     local log = RDTConfig.raidLog
-    if log and log.startTime and log.zone == zone then return end
+    -- A finished normal dungeon can be run again without disbanding. Require
+    -- leaving it first, so reloads and later pulls inside the same run keep it.
+    local repeatDungeon = normalDungeon and log and log.finalDown and log.leftCompletedDungeon
+    if log and log.startTime and log.zone == zone and not repeatDungeon then return end
 
     -- Multi-instance chain (double raid night): the previous segment is
     -- retroactively closed at its LAST boss kill, so travel time between
@@ -522,6 +527,7 @@ local function OnCombatStart()
         table.insert(log.zones, zone)
         log.killed      = {}
         log.finalDown   = nil
+        log.leftCompletedDungeon = nil
         UpdateTimeLine()
         print("|cff00ff00[RDT]|r Timer continues: " .. zone
             .. " (travel time excluded)")
@@ -1266,6 +1272,13 @@ frame:SetScript("OnEvent", function(self, event, ...)
         end
 
     elseif event == "PLAYER_ENTERING_WORLD" then
+        local log = RDTConfig and RDTConfig.raidLog
+        if log and log.instType == "party" and log.finalDown then
+            local _, instType = IsInInstance()
+            if instType ~= "party" or GetRealZoneText() ~= log.zone then
+                log.leftCompletedDungeon = true
+            end
+        end
         UpdateGroupVisibility()
 
     elseif event == "PLAYER_REGEN_DISABLED" then
